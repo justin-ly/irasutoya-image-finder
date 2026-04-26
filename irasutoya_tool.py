@@ -4,83 +4,96 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 from deep_translator import GoogleTranslator
+from textblob import TextBlob
 import time
 
 # --- Helper Functions ---
 
 def translate_to_japanese(text):
-    """Translates Chinese or English to Japanese."""
     try:
-        # It automatically detects source language
-        translated = GoogleTranslator(source='auto', target='ja').translate(text)
-        return translated
+        return GoogleTranslator(source='auto', target='ja').translate(text)
     except:
-        return text # Fallback to original
+        return text
 
-def get_irasutoya_image(keyword_jp):
-    """Scrapes the direct PNG link from Irasutoya."""
+def translate_to_english(text):
+    try:
+        return GoogleTranslator(source='auto', target='en').translate(text)
+    except:
+        return text
+
+def get_sentiment(word):
+    en_word = translate_to_english(word)
+    analysis = TextBlob(en_word)
+    if analysis.sentiment.polarity > 0.1: return "Positive"
+    elif analysis.sentiment.polarity < -0.1: return "Negative"
+    else: return "Neutral"
+
+def get_top_3_images(keyword_jp):
+    """Scrapes up to 3 direct PNG links from Irasutoya search results."""
     try:
         search_url = f"https://www.irasutoya.com/search?q={quote(keyword_jp)}"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(search_url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Find the first image post
-        post = soup.find('div', class_='boxim')
-        if not post:
-            return "No image found"
+        posts = soup.find_all('div', class_='boxim')
+        links = []
         
-        post_link = post.find('a')['href']
+        for post in posts[:3]: # Limit to top 3
+            try:
+                post_link = post.find('a')['href']
+                post_res = requests.get(post_link, headers=headers, timeout=5)
+                post_soup = BeautifulSoup(post_res.text, 'html.parser')
+                img_tag = post_soup.find('div', class_='separator').find('img')
+                links.append(img_tag['src'])
+            except:
+                links.append("N/A")
         
-        # Get high-res image from the post page
-        post_res = requests.get(post_link, headers=headers, timeout=10)
-        post_soup = BeautifulSoup(post_res.text, 'html.parser')
-        
-        # Extract the image URL
-        img_tag = post_soup.find('div', class_='separator').find('img')
-        return img_tag['src']
+        # Pad with N/A if fewer than 3 found
+        while len(links) < 3:
+            links.append("N/A")
+            
+        return links
     except Exception:
-        return "Error fetching image"
+        return ["Error", "Error", "Error"]
 
 # --- Streamlit UI ---
 
-st.set_page_config(page_title="Irasutoya Teacher Tool", page_icon="🏫")
-st.title("🏫 Chinese Lesson Image Finder")
-st.markdown("""
-1. Upload a CSV/Excel with your vocabulary list.
-2. The app translates your words to Japanese.
-3. It finds the matching **Irasutoya** links for your slides.
-""")
+st.set_page_config(page_title="Irasutoya Bulk Pro", page_icon="🎨")
+st.title("🎨 Irasutoya Bulk Image Finder (Pro Edition)")
 
-uploaded_file = st.file_uploader("Upload Vocabulary List", type=["csv", "xlsx"])
+uploaded_file = st.file_uploader("Upload your Vocabulary List (CSV/Excel)", type=["csv", "xlsx"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-    col = st.selectbox("Which column has the Chinese words?", df.columns)
+    col = st.selectbox("Which column has your vocabulary?", df.columns)
     
-    if st.button("Generate Image Links"):
+    if st.button("Generate Pro Search"):
         results = []
-        progress_text = st.empty()
-        bar = st.progress(0)
+        sentiments = []
+        
+        progress_bar = st.progress(0)
         
         for i, word in enumerate(df[col]):
-            # 1. Translate
+            # 1. Analyze Sentiment
+            sent = get_sentiment(str(word))
+            sentiments.append(sent)
+            
+            # 2. Translate and Search
             word_jp = translate_to_japanese(str(word))
-            progress_text.text(f"Processing: {word} → {word_jp}")
+            links = get_top_3_images(word_jp)
+            results.append(links)
             
-            # 2. Search
-            link = get_irasutoya_image(word_jp)
-            results.append(link)
+            progress_bar.progress((i + 1) / len(df))
+            time.sleep(0.5) 
             
-            # 3. Update Progress
-            bar.progress((i + 1) / len(df))
-            time.sleep(0.5) # Gentle on their servers
-            
-        df['Japanese_Keyword'] = [translate_to_japanese(str(w)) for w in df[col]]
-        df['Irasutoya_Link'] = results
+        # Build new DataFrame
+        output_df = pd.DataFrame(results, columns=['Link 1', 'Link 2', 'Link 3'])
+        output_df.insert(0, col, df[col])
+        output_df.insert(1, 'Sentiment', sentiments)
         
-        st.success("All done!")
-        st.dataframe(df[[col, 'Japanese_Keyword', 'Irasutoya_Link']])
+        st.success("Search complete!")
+        st.dataframe(output_df)
         
-        csv = df.to_csv(index=False).encode('utf-8-sig') # Use utf-8-sig for Chinese characters
-        st.download_button("📥 Download Result", csv, "irasutoya_links.csv", "text/csv")
+        csv = output_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 Download Results", csv, "irasutoya_pro_results.csv", "text/csv")
