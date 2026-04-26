@@ -4,4 +4,4 @@ requests
 beautifulsoup4
 deep-translator
 openpyxl
-textblob
+nltk
