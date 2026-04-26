@@ -4,32 +4,26 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 from deep_translator import GoogleTranslator
-from textblob import TextBlob
 import time
 
 # --- Helper Functions ---
 
 def translate_to_japanese(text):
     try:
-        return GoogleTranslator(source='auto', target='ja').translate(text)
+        # We append 'イラスト' to force illustration results
+        return GoogleTranslator(source='auto', target='ja').translate(text) + " イラスト"
     except:
         return text
 
-def translate_to_english(text):
-    try:
-        return GoogleTranslator(source='auto', target='en').translate(text)
-    except:
-        return text
+def calculate_relevance(keyword, title):
+    """Simple logic to score relevance by word overlap."""
+    keyword_set = set(keyword.lower().split())
+    title_set = set(title.lower().split())
+    intersection = keyword_set.intersection(title_set)
+    return len(intersection) / len(keyword_set) if len(keyword_set) > 0 else 0
 
-def get_sentiment(word):
-    en_word = translate_to_english(word)
-    analysis = TextBlob(en_word)
-    if analysis.sentiment.polarity > 0.1: return "Positive"
-    elif analysis.sentiment.polarity < -0.1: return "Negative"
-    else: return "Neutral"
-
-def get_top_3_images(keyword_jp):
-    """Scrapes up to 3 direct PNG links from Irasutoya search results."""
+def get_best_images(keyword_jp, original_keyword):
+    """Fetches top 10, then ranks them by relevance logic."""
     try:
         search_url = f"https://www.irasutoya.com/search?q={quote(keyword_jp)}"
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -37,63 +31,70 @@ def get_top_3_images(keyword_jp):
         soup = BeautifulSoup(response.text, 'html.parser')
         
         posts = soup.find_all('div', class_='boxim')
-        links = []
+        results = []
         
-        for post in posts[:3]: # Limit to top 3
+        # Look at the top 10, not just top 3
+        for post in posts[:10]:
             try:
+                title = post.get_text(strip=True)
                 post_link = post.find('a')['href']
+                
+                # Fetch the image
                 post_res = requests.get(post_link, headers=headers, timeout=5)
                 post_soup = BeautifulSoup(post_res.text, 'html.parser')
                 img_tag = post_soup.find('div', class_='separator').find('img')
-                links.append(img_tag['src'])
+                img_url = img_tag['src'] if img_tag else "N/A"
+                
+                # Logic: Score the relevance
+                score = calculate_relevance(original_keyword, title)
+                results.append({"title": title, "url": img_url, "score": score})
             except:
-                links.append("N/A")
+                continue
         
-        # Pad with N/A if fewer than 3 found
-        while len(links) < 3:
-            links.append("N/A")
-            
-        return links
-    except Exception:
-        return ["Error", "Error", "Error"]
+        # Rank by score (high to low)
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:3] # Return top 3 ranked
+    except:
+        return []
 
 # --- Streamlit UI ---
 
-st.set_page_config(page_title="Irasutoya Bulk Pro", page_icon="🎨")
-st.title("🎨 Irasutoya Bulk Image Finder (Pro Edition)")
+st.set_page_config(page_title="Irasutoya Logic-Based Finder", page_icon="🎯")
+st.title("🎯 Irasutoya Pro: Logic-Based Search")
 
-uploaded_file = st.file_uploader("Upload your Vocabulary List (CSV/Excel)", type=["csv", "xlsx"])
+uploaded_file = st.file_uploader("Upload Vocabulary List (CSV/Excel)", type=["csv", "xlsx"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
     col = st.selectbox("Which column has your vocabulary?", df.columns)
     
-    if st.button("Generate Pro Search"):
-        results = []
-        sentiments = []
-        
+    if st.button("Generate Logic-Optimized Search"):
+        data = []
         progress_bar = st.progress(0)
         
         for i, word in enumerate(df[col]):
-            # 1. Analyze Sentiment
-            sent = get_sentiment(str(word))
-            sentiments.append(sent)
-            
-            # 2. Translate and Search
+            # Translate & add 'Illustration' context
             word_jp = translate_to_japanese(str(word))
-            links = get_top_3_images(word_jp)
-            results.append(links)
             
+            # Logic Search
+            ranked_results = get_best_images(word_jp, str(word))
+            
+            # Formatting for table
+            row = [word]
+            for res in ranked_results:
+                row.append(res['url'])
+            
+            # Fill empty if < 3
+            while len(row) < 4:
+                row.append("No match found")
+            
+            data.append(row)
             progress_bar.progress((i + 1) / len(df))
             time.sleep(0.5) 
             
-        # Build new DataFrame
-        output_df = pd.DataFrame(results, columns=['Link 1', 'Link 2', 'Link 3'])
-        output_df.insert(0, col, df[col])
-        output_df.insert(1, 'Sentiment', sentiments)
+        final_df = pd.DataFrame(data, columns=[col, 'Link 1 (Best Match)', 'Link 2', 'Link 3'])
+        st.success("Search complete using relevance logic!")
+        st.dataframe(final_df)
         
-        st.success("Search complete!")
-        st.dataframe(output_df)
-        
-        csv = output_df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 Download Results", csv, "irasutoya_pro_results.csv", "text/csv")
+        csv = final_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📥 Download Results", csv, "irasutoya_logic_results.csv", "text/csv")
