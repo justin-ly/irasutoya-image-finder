@@ -107,7 +107,7 @@ def perform_search(word, override_term=None):
 # --- Streamlit UI ---
 st.set_page_config(page_title="Irasutoya Smart Selector", layout="wide")
 
-lang = st.sidebar.selectbox("Language / 語言", ["English", "Traditional Chinese"])
+lang = st.sidebar.selectbox("Language / 語言", ["English", "中文（繁體）"])
 t = UI_TEXT[lang]
 
 st.title(t["title"])
