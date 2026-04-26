@@ -16,7 +16,6 @@ def setup_nltk():
     except LookupError:
         nltk.download('wordnet')
         nltk.download('omw-1.4')
-
 setup_nltk()
 
 # --- Helper Functions ---
@@ -41,20 +40,13 @@ def get_candidates(keyword_jp):
         return results
     except: return []
 
-def get_synonyms(word):
-    """Generates English synonyms for fallback searches."""
-    synonyms = set()
-    for syn in wordnet.synsets(word):
-        for lemma in syn.lemmas():
-            synonyms.add(lemma.name().replace('_', ' '))
-    return list(synonyms)
-
-def perform_search(word, manual_term=None):
-    """Tiered search: Manual Override -> Original -> Synonyms."""
-    # 1. Manual Override
-    if manual_term:
-        results = get_candidates(manual_term)
-        return results, manual_term
+def perform_search(word, override_term=None):
+    """Tiered search: Manual Override -> Original Word -> Synonyms."""
+    # 1. Manual Override (Always Translate to JP first!)
+    if override_term:
+        jp_term = GoogleTranslator(source='auto', target='ja').translate(override_term)
+        results = get_candidates(jp_term)
+        return results, jp_term
     
     # 2. Original Translation
     jp_word = GoogleTranslator(source='auto', target='ja').translate(word)
@@ -63,12 +55,13 @@ def perform_search(word, manual_term=None):
     
     # 3. Synonyms
     en_word = GoogleTranslator(source='auto', target='en').translate(word)
-    synonyms = get_synonyms(en_word)
-    for syn in synonyms[:5]:
-        syn_jp = GoogleTranslator(source='en', target='ja').translate(syn)
-        results = get_candidates(syn_jp)
-        if results: return results, syn_jp
-        
+    for syn in wordnet.synsets(en_word):
+        for lemma in syn.lemmas():
+            syn_en = lemma.name().replace('_', ' ')
+            syn_jp = GoogleTranslator(source='en', target='ja').translate(syn_en)
+            results = get_candidates(syn_jp)
+            if results: return results, syn_jp
+            
     return [], jp_word
 
 # --- Streamlit UI ---
@@ -78,7 +71,7 @@ st.title("🎨 Irasutoya Smart Selector")
 
 if 'index' not in st.session_state: st.session_state.index = 0
 if 'selections' not in st.session_state: st.session_state.selections = []
-if 'manual_search' not in st.session_state: st.session_state.manual_search = ""
+if 'manual_input' not in st.session_state: st.session_state.manual_input = ""
 
 uploaded_file = st.file_uploader("Upload Vocabulary List (CSV/Excel)", type=["csv", "xlsx"])
 
@@ -91,42 +84,39 @@ if uploaded_file:
         current_word = words[st.session_state.index]
         st.subheader(f"Word {st.session_state.index + 1} of {len(words)}: **{current_word}**")
         
-        # Determine if we have a manual override trigger
-        manual_override = st.session_state.manual_search if st.session_state.manual_search else None
+        # 1. Search Box ALWAYS visible
+        st.write("---")
+        with st.expander("🔍 Search Override (Type English or Japanese here)", expanded=True):
+            new_term = st.text_input("Enter keyword:", value=st.session_state.manual_input)
+            if st.button("Apply Search"):
+                st.session_state.manual_input = new_term
+                st.rerun()
+            if st.button("Clear Override"):
+                st.session_state.manual_input = ""
+                st.rerun()
+
+        # 2. Execute Search
+        with st.spinner("Searching..."):
+            results, used_term = perform_search(current_word, st.session_state.manual_input)
         
-        # Execute Search
-        with st.spinner(f"Searching..."):
-            results, used_term = perform_search(current_word, manual_override)
-        
-        # Display Search Context
-        st.info(f"Currently searching for: **{used_term}**")
+        # 3. Tracking/Status Tracker at the top
+        st.success(f"Current active keyword: **{used_term}**")
         
         if not results:
-            st.warning("No images found with current term.")
-            # Manual Input Box for Override
-            new_term = st.text_input("Try searching for a different keyword (e.g., 'dog', '学校'):", key="override_input")
-            if st.button("Search with new keyword"):
-                st.session_state.manual_search = new_term
-                st.rerun()
-            if st.button("Skip"):
-                st.session_state.manual_search = ""
-                st.session_state.selections.append("Skipped")
-                st.session_state.index += 1
-                st.rerun()
+            st.warning("No images found. Please try a different keyword in the box above.")
         else:
-            # Display results
             cols = st.columns(len(results))
             for i, img_url in enumerate(results):
                 with cols[i]:
                     st.image(img_url, use_container_width=True)
                     if st.button(f"Select #{i+1}", key=f"btn_{i}"):
                         st.session_state.selections.append(img_url)
-                        st.session_state.manual_search = "" # Reset for next word
+                        st.session_state.manual_input = "" # Clear for next word
                         st.session_state.index += 1
                         st.rerun()
             
             if st.button("Skip this word"):
-                st.session_state.manual_search = ""
+                st.session_state.manual_input = ""
                 st.session_state.selections.append("Skipped")
                 st.session_state.index += 1
                 st.rerun()
@@ -136,7 +126,3 @@ if uploaded_file:
         st.dataframe(final_df)
         csv = final_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button("📥 Download Result", csv, "curated_images.csv", "text/csv")
-        if st.button("Start Over"):
-            st.session_state.index = 0
-            st.session_state.selections = []
-            st.rerun()
