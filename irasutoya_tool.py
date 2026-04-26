@@ -4,7 +4,6 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 from deep_translator import GoogleTranslator
-import time
 import nltk
 from nltk.corpus import wordnet
 
@@ -40,29 +39,43 @@ def get_candidates(keyword_jp):
         return results
     except: return []
 
+def get_variations(word):
+    """Generates a list of related search terms to cast a wider net."""
+    variations = [word]
+    
+    # 1. Decomposition (e.g., 'Garbage Truck' -> 'Garbage')
+    words = word.split()
+    if len(words) > 1:
+        variations.extend(words)
+        
+    # 2. Synonyms
+    for syn in wordnet.synsets(word):
+        for lemma in syn.lemmas():
+            variations.append(lemma.name().replace('_', ' '))
+            
+    return list(set(variations))[:6] # Limit to 6 to keep it fast
+
 def perform_search(word, override_term=None):
-    """Tiered search: Manual Override -> Original Word -> Synonyms."""
-    # 1. Manual Override (Always Translate to JP first!)
+    """Aggressive search that checks multiple variations."""
+    # 1. Manual Override
     if override_term:
         jp_term = GoogleTranslator(source='auto', target='ja').translate(override_term)
-        results = get_candidates(jp_term)
-        return results, jp_term
+        return get_candidates(jp_term), jp_term
     
-    # 2. Original Translation
-    jp_word = GoogleTranslator(source='auto', target='ja').translate(word)
-    results = get_candidates(jp_word)
-    if results: return results, jp_word
-    
-    # 3. Synonyms
+    # 2. Multi-Pass Search
+    all_results = []
     en_word = GoogleTranslator(source='auto', target='en').translate(word)
-    for syn in wordnet.synsets(en_word):
-        for lemma in syn.lemmas():
-            syn_en = lemma.name().replace('_', ' ')
-            syn_jp = GoogleTranslator(source='en', target='ja').translate(syn_en)
-            results = get_candidates(syn_jp)
-            if results: return results, syn_jp
+    variations = get_variations(en_word)
+    
+    for var in variations:
+        var_jp = GoogleTranslator(source='en', target='ja').translate(var)
+        results = get_candidates(var_jp)
+        if results:
+            all_results.extend(results)
             
-    return [], jp_word
+    # Remove duplicates while keeping order
+    unique_results = list(dict.fromkeys(all_results))
+    return unique_results[:10], f"Multiple terms (Roots: {', '.join(variations[:3])})"
 
 # --- Streamlit UI ---
 
@@ -84,34 +97,30 @@ if uploaded_file:
         current_word = words[st.session_state.index]
         st.subheader(f"Word {st.session_state.index + 1} of {len(words)}: **{current_word}**")
         
-        # 1. Search Box ALWAYS visible
-        st.write("---")
-        with st.expander("🔍 Search Override (Type English or Japanese here)", expanded=True):
-            new_term = st.text_input("Enter keyword:", value=st.session_state.manual_input)
-            if st.button("Apply Search"):
+        # Search Box
+        with st.expander("🔍 Search Options", expanded=True):
+            new_term = st.text_input("Refine search (e.g., 'garbage', 'truck'):", value=st.session_state.manual_input)
+            if st.button("Update Search"):
                 st.session_state.manual_input = new_term
                 st.rerun()
-            if st.button("Clear Override"):
-                st.session_state.manual_input = ""
-                st.rerun()
 
-        # 2. Execute Search
-        with st.spinner("Searching..."):
+        # Execute Search
+        with st.spinner("Searching widely..."):
             results, used_term = perform_search(current_word, st.session_state.manual_input)
         
-        # 3. Tracking/Status Tracker at the top
-        st.success(f"Current active keyword: **{used_term}**")
+        st.success(f"Searching for: **{used_term}**")
         
         if not results:
-            st.warning("No images found. Please try a different keyword in the box above.")
+            st.warning("No images found. Please type a specific keyword in the box above.")
         else:
-            cols = st.columns(len(results))
+            # Display results in a grid
+            cols = st.columns(5)
             for i, img_url in enumerate(results):
-                with cols[i]:
+                with cols[i % 5]:
                     st.image(img_url, use_container_width=True)
                     if st.button(f"Select #{i+1}", key=f"btn_{i}"):
                         st.session_state.selections.append(img_url)
-                        st.session_state.manual_input = "" # Clear for next word
+                        st.session_state.manual_input = ""
                         st.session_state.index += 1
                         st.rerun()
             
