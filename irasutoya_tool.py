@@ -23,13 +23,13 @@ UI_TEXT = {
         "title": "🎨 Irasutoya Smart Selector",
         "upload": "Upload Vocabulary List (CSV/Excel)",
         "select_col": "Which column is your vocabulary?",
-        "search_title": "🔍 Need a better match?",
-        "search_help": "Not finding the results? Type a specific keyword here to refine the search.",
-        "search_label": "Enter custom keyword:",
+        "search_title": "🔍 Manual Search Override",
+        "search_help": "Not finding the results? Enter a keyword (English or native) to force a search.",
+        "search_label": "Enter keyword:",
         "update_btn": "Update Search",
-        "searching": "Searching...",
+        "searching": "Searching dynamically...",
         "searching_for": "Current search term: ",
-        "no_results": "No images found. Try a different, simpler keyword (e.g., 'truck' instead of 'garbage truck').",
+        "no_results": "No images found. Please try a different keyword in the box above.",
         "select_btn": "Select #",
         "skip_btn": "Skip this word",
         "done": "All done!",
@@ -41,13 +41,13 @@ UI_TEXT = {
         "title": "🎨 統計圖庫智能選擇器",
         "upload": "上傳詞彙列表 (CSV/Excel)",
         "select_col": "請問詞彙在哪個欄位？",
-        "search_title": "🔍 找不到合適的圖片？",
-        "search_help": "沒找到滿意的結果嗎？嘗試輸入更簡單或具體的關鍵字。",
-        "search_label": "輸入自訂關鍵字:",
+        "search_title": "🔍 手動搜尋調整",
+        "search_help": "沒找到滿意的結果嗎？輸入關鍵字以手動強制搜尋。",
+        "search_label": "輸入關鍵字:",
         "update_btn": "更新搜尋",
-        "searching": "正在搜尋...",
+        "searching": "正在動態搜尋...",
         "searching_for": "當前搜尋詞: ",
-        "no_results": "未找到圖片。請嘗試更簡單的關鍵字 (例如: '垃圾' 而非 '垃圾車')。",
+        "no_results": "未找到圖片。請在上方輸入框輸入其他關鍵字。",
         "select_btn": "選擇 #",
         "skip_btn": "跳過此詞彙",
         "done": "完成！",
@@ -77,44 +77,55 @@ def get_candidates(keyword_jp):
         return results
     except: return []
 
+def get_dynamic_related_terms(word):
+    """Dynamically finds broader concepts (hypernyms) using NLTK."""
+    en_word = GoogleTranslator(source='auto', target='en').translate(word)
+    synsets = wordnet.synsets(en_word)
+    related_terms = set()
+    
+    for syn in synsets:
+        # Add hypernyms (Broader concepts like 'Truck' for 'Garbage Truck')
+        for hyper in syn.hypernyms():
+            related_terms.add(hyper.lemmas()[0].name().replace('_', ' '))
+    
+    # Translate back to Japanese
+    jp_related = []
+    for term in list(related_terms)[:3]: # Limit to 3 to keep it fast
+        jp_related.append(GoogleTranslator(source='en', target='ja').translate(term))
+    return jp_related
+
 def perform_search(word, override_term=None):
-    # 1. Manual Override (Priority)
+    # 1. Manual Override
     if override_term:
         jp_term = GoogleTranslator(source='auto', target='ja').translate(override_term)
         return get_candidates(jp_term), jp_term
     
-    # 2. Direct Search (The "Missing Link" that fixes your issue)
+    # 2. Direct Translation Search
     jp_term = GoogleTranslator(source='auto', target='ja').translate(word)
     results = get_candidates(jp_term)
     if results:
         return results, jp_term
 
-    # 3. Fallback: English Synonyms (Only runs if direct search fails)
-    en_word = GoogleTranslator(source='auto', target='en').translate(word)
-    syn_results = []
-    
-    for syn in wordnet.synsets(en_word):
-        for lemma in syn.lemmas():
-            syn_en = lemma.name().replace('_', ' ')
-            syn_jp = GoogleTranslator(source='en', target='ja').translate(syn_en)
-            results = get_candidates(syn_jp)
-            if results:
-                syn_results.extend(results)
-    
-    unique_results = list(dict.fromkeys(syn_results))
-    return unique_results[:10], f"Fallback Synonyms for {en_word}"
+    # 3. Dynamic Expansion (If direct fails)
+    related_terms = get_dynamic_related_terms(word)
+    for related in related_terms:
+        results = get_candidates(related)
+        if results:
+            return results, f"Related Concept: {related}"
+            
+    return [], jp_term
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Irasutoya Smart Selector", layout="wide")
 
-lang = st.sidebar.selectbox("Language / 語言", ["English", "中文（繁體）"])
+lang = st.sidebar.selectbox("Language / 語言", ["English", "Traditional Chinese"])
 t = UI_TEXT[lang]
 
 st.title(t["title"])
 
 if 'index' not in st.session_state: st.session_state.index = 0
 if 'selections' not in st.session_state: st.session_state.selections = []
-if 'manual_input' not in st.session_state: st.session_state.manual_input = ""
+if 'manual_input' not in st.session_state: st.manual_input = ""
 
 uploaded_file = st.file_uploader(t["upload"], type=["csv", "xlsx"])
 
