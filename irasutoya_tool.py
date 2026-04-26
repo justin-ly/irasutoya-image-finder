@@ -24,12 +24,12 @@ UI_TEXT = {
         "upload": "Upload Vocabulary List (CSV/Excel)",
         "select_col": "Which column is your vocabulary?",
         "search_title": "🔍 Need a better match?",
-        "search_help": "Not finding the results you want? Try typing a more specific, broader, or related keyword here to manually refine the search.",
-        "search_label": "Enter custom keyword (English or local language):",
+        "search_help": "Not finding the results? Type a specific keyword here to refine the search.",
+        "search_label": "Enter custom keyword:",
         "update_btn": "Update Search",
-        "searching": "Searching widely...",
-        "searching_for": "Searching for: ",
-        "no_results": "No images found. Please try a different keyword above.",
+        "searching": "Searching...",
+        "searching_for": "Current search term: ",
+        "no_results": "No images found. Try a different, simpler keyword (e.g., 'truck' instead of 'garbage truck').",
         "select_btn": "Select #",
         "skip_btn": "Skip this word",
         "done": "All done!",
@@ -42,12 +42,12 @@ UI_TEXT = {
         "upload": "上傳詞彙列表 (CSV/Excel)",
         "select_col": "請問詞彙在哪個欄位？",
         "search_title": "🔍 找不到合適的圖片？",
-        "search_help": "沒找到滿意的結果嗎？您可以嘗試輸入更精確、更廣泛或相關的關鍵字，手動優化搜尋結果。",
-        "search_label": "輸入自訂關鍵字 (中文或英文):",
+        "search_help": "沒找到滿意的結果嗎？嘗試輸入更簡單或具體的關鍵字。",
+        "search_label": "輸入自訂關鍵字:",
         "update_btn": "更新搜尋",
-        "searching": "正在全面搜尋...",
-        "searching_for": "正在搜尋: ",
-        "no_results": "未找到圖片。請嘗試在上方輸入其他關鍵字。",
+        "searching": "正在搜尋...",
+        "searching_for": "當前搜尋詞: ",
+        "no_results": "未找到圖片。請嘗試更簡單的關鍵字 (例如: '垃圾' 而非 '垃圾車')。",
         "select_btn": "選擇 #",
         "skip_btn": "跳過此詞彙",
         "done": "完成！",
@@ -77,36 +77,36 @@ def get_candidates(keyword_jp):
         return results
     except: return []
 
-def get_variations(word):
-    variations = [word]
-    words = word.split()
-    if len(words) > 1: variations.extend(words)
-    for syn in wordnet.synsets(word):
-        for lemma in syn.lemmas():
-            variations.append(lemma.name().replace('_', ' '))
-    return list(set(variations))[:6]
-
 def perform_search(word, override_term=None):
+    # 1. Manual Override (Priority)
     if override_term:
         jp_term = GoogleTranslator(source='auto', target='ja').translate(override_term)
         return get_candidates(jp_term), jp_term
     
-    all_results = []
+    # 2. Direct Search (The "Missing Link" that fixes your issue)
+    jp_term = GoogleTranslator(source='auto', target='ja').translate(word)
+    results = get_candidates(jp_term)
+    if results:
+        return results, jp_term
+
+    # 3. Fallback: English Synonyms (Only runs if direct search fails)
     en_word = GoogleTranslator(source='auto', target='en').translate(word)
-    variations = get_variations(en_word)
+    syn_results = []
     
-    for var in variations:
-        var_jp = GoogleTranslator(source='en', target='ja').translate(var)
-        results = get_candidates(var_jp)
-        if results: all_results.extend(results)
-            
-    unique_results = list(dict.fromkeys(all_results))
-    return unique_results[:10], f"Multiple terms (Roots: {', '.join(variations[:3])})"
+    for syn in wordnet.synsets(en_word):
+        for lemma in syn.lemmas():
+            syn_en = lemma.name().replace('_', ' ')
+            syn_jp = GoogleTranslator(source='en', target='ja').translate(syn_en)
+            results = get_candidates(syn_jp)
+            if results:
+                syn_results.extend(results)
+    
+    unique_results = list(dict.fromkeys(syn_results))
+    return unique_results[:10], f"Fallback Synonyms for {en_word}"
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Irasutoya Smart Selector", layout="wide")
 
-# Language Switcher
 lang = st.sidebar.selectbox("Language / 語言", ["English", "Traditional Chinese"])
 t = UI_TEXT[lang]
 
@@ -127,7 +127,6 @@ if uploaded_file:
         current_word = words[st.session_state.index]
         st.subheader(f"Word {st.session_state.index + 1} of {len(words)}: **{current_word}**")
         
-        # User-friendly Search Expander
         with st.expander(t["search_title"]):
             st.caption(t["search_help"])
             new_term = st.text_input(t["search_label"], value=st.session_state.manual_input)
