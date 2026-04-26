@@ -5,98 +5,143 @@ from bs4 import BeautifulSoup
 from urllib.parse import quote
 from deep_translator import GoogleTranslator
 
-# --- Core Logic ---
-def get_candidates(keyword_jp):
-    """Fetch images from Irasutoya."""
+# --- Language Settings ---
+UI_TEXT = {
+    "English": {
+        "title": "🎨 Irasutoya Smart Selector",
+        "upload": "Upload Vocabulary List",
+        "search_label": "Enter search keyword:",
+        "update_btn": "Update Search",
+        "searching": "Searching...",
+        "status_trying": "Trying search term: ",
+        "no_results": "No images found after trying all terms.",
+        "select": "Select",
+        "done": "All Done!"
+    },
+    "Traditional Chinese": {
+        "title": "🎨 統計圖庫智能選擇器",
+        "upload": "上傳詞彙列表",
+        "search_label": "輸入搜尋關鍵字:",
+        "update_btn": "更新搜尋",
+        "searching": "正在執行搜尋...",
+        "status_trying": "嘗試搜尋詞: ",
+        "no_results": "嘗試所有相關詞彙後仍無結果。",
+        "select": "選擇",
+        "done": "完成！"
+    }
+}
+
+# --- Search Logic ---
+def get_images_from_irasutoya(keyword_ja):
+    """Fetches images for a specific Japanese keyword."""
     try:
-        search_url = f"https://www.irasutoya.com/search?q={quote(keyword_jp)}"
+        url = f"https://www.irasutoya.com/search?q={quote(keyword_ja)}"
         headers = {"User-Agent": "Mozilla/5.0"}
-        # Timeout is short to keep the "loop" feeling fast
-        response = requests.get(search_url, headers=headers, timeout=5)
+        response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
+        # Irasutoya results are in class 'boxim'
         posts = soup.find_all('div', class_='boxim')
-        results = []
+        images = []
         for post in posts[:5]:
             img = post.find('img')
-            if img: results.append(img['src'])
-        return results
-    except Exception as e:
+            if img and img.get('src'):
+                images.append(img['src'])
+        return images
+    except:
         return []
 
-def perform_search_loop(word, manual_override=None):
+def get_related_terms(word):
     """
-    Explicitly loops through a priority queue of search terms.
+    Returns a sequence of terms to try.
+    1. Direct Translation
+    2. Common associated Japanese terms
     """
-    # 1. Manual Override
-    if manual_override:
-        return get_candidates(manual_override), [manual_override]
-
-    # 2. Build explicit search queue
-    # Convert word to EN first to get the base concept, then translate to JA
-    en_word = GoogleTranslator(source='auto', target='en').translate(word)
-    jp_word = GoogleTranslator(source='en', target='ja').translate(en_word)
+    # Translate current word to JP
+    jp_word = GoogleTranslator(source='auto', target='ja').translate(word)
     
-    # Generate variations: 
-    # [Exact JP Translation, Base Concept (EN -> JP)]
+    # Pre-defined associations for common tricky terms
+    associations = {
+        "ゴミ": ["ゴミ", "ゴミ収集車", "パッカー車"],
+        "垃圾": ["ゴミ", "ゴミ収集車", "パッカー車"],
+        "学校": ["学校", "教室", "校舎"],
+        "病院": ["病院", "医師", "看護師"]
+    }
+    
+    # Return: [Original Translation, + Associated Terms]
     queue = [jp_word]
-    if " " in en_word:
-        # If it's a phrase (Garbage Truck), add the core word (Garbage)
-        core_word = en_word.split()[-1]
-        core_jp = GoogleTranslator(source='en', target='ja').translate(core_word)
-        queue.append(core_jp)
+    if jp_word in associations:
+        queue.extend(associations[jp_word])
     
-    # 3. Execution Loop
-    tried_terms = []
-    for q in queue:
-        tried_terms.append(q)
-        res = get_candidates(q)
-        if res:
-            return res, tried_terms # Return results and the list of attempts
-            
-    return [], tried_terms
+    # Remove duplicates but keep order
+    return list(dict.fromkeys(queue))
 
-# --- App UI ---
+# --- UI Setup ---
 st.set_page_config(layout="wide")
 
-# Init state
 if 'index' not in st.session_state: st.session_state.index = 0
 if 'selections' not in st.session_state: st.session_state.selections = []
 if 'manual_override' not in st.session_state: st.session_state.manual_override = ""
 
-st.title("🎨 Irasutoya Smart Selector")
+# Sidebar for Language
+lang = st.sidebar.selectbox("Language / 語言", ["English", "Traditional Chinese"])
+t = UI_TEXT[lang]
 
-uploaded_file = st.file_uploader("Upload CSV/Excel", type=["csv", "xlsx"])
+st.title(t["title"])
+
+uploaded_file = st.file_uploader(t["upload"], type=["csv", "xlsx"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-    col = st.selectbox("Select column", df.columns)
+    col = st.selectbox("Select vocabulary column", df.columns)
     words = df[col].tolist()
 
     if st.session_state.index < len(words):
         word = words[st.session_state.index]
         st.subheader(f"Word {st.session_state.index + 1}: {word}")
         
-        # Override Input
-        new_val = st.text_input("Enter keyword:", value=st.session_state.manual_override)
-        if st.button("Update"):
-            st.session_state.manual_override = new_val
+        # Manual Input
+        manual_in = st.text_input(t["search_label"], value=st.session_state.manual_override)
+        if st.button(t["update_btn"]):
+            st.session_state.manual_override = manual_in
             st.rerun()
 
-        with st.spinner("Searching..."):
-            results, attempts = perform_search_loop(word, st.session_state.manual_override)
+        # Search Loop with Status
+        final_images = []
         
-        # Visual feedback for the loop
-        st.write(f"Attempts made: **{' → '.join(attempts)}**")
-        
-        if not results:
-            st.warning("No images found after trying: " + ", ".join(attempts))
+        if st.session_state.manual_override:
+            # If manual override exists, only search that
+            with st.status(t["searching"]) as status:
+                st.write(f"{t['status_trying']} {st.session_state.manual_override}")
+                final_images = get_images_from_irasutoya(st.session_state.manual_override)
+                status.update(label="Search Complete", state="complete")
+        else:
+            # Otherwise, run the cascade loop
+            terms_to_try = get_related_terms(word)
+            with st.status(t["searching"]) as status:
+                for term in terms_to_try:
+                    st.write(f"{t['status_trying']} {term}")
+                    final_images = get_images_from_irasutoya(term)
+                    if final_images:
+                        status.update(label=f"Found results for: {term}", state="complete")
+                        break
+                else:
+                    status.update(label="No results", state="error")
+
+        # Display Results
+        if not final_images:
+            st.warning(t["no_results"])
         else:
             cols = st.columns(5)
-            for i, img_url in enumerate(results):
+            for i, img in enumerate(final_images):
                 with cols[i % 5]:
-                    st.image(img_url, use_container_width=True)
-                    if st.button(f"Select {i+1}", key=f"btn_{i}"):
-                        st.session_state.selections.append(img_url)
+                    st.image(img, use_container_width=True)
+                    if st.button(f"{t['select']} {i+1}", key=f"btn_{i}"):
+                        st.session_state.selections.append(img)
                         st.session_state.manual_override = ""
                         st.session_state.index += 1
                         st.rerun()
+            
+            if st.button("Skip"):
+                st.session_state.manual_override = ""
+                st.session_state.index += 1
+                st.rerun()
