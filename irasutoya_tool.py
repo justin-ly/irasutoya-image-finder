@@ -23,11 +23,13 @@ UI_TEXT = {
         "title": "🎨 Irasutoya Smart Selector",
         "upload": "Upload Vocabulary List (CSV/Excel)",
         "select_col": "Which column is your vocabulary?",
-        "search_label": "Refine search (e.g., 'garbage', 'truck'):",
+        "search_title": "🔍 Need a better match?",
+        "search_help": "Not finding the results you want? Try typing a more specific, broader, or related keyword here to manually refine the search.",
+        "search_label": "Enter custom keyword (English or local language):",
         "update_btn": "Update Search",
         "searching": "Searching widely...",
         "searching_for": "Searching for: ",
-        "no_results": "No images found. Please type a specific keyword in the box above.",
+        "no_results": "No images found. Please try a different keyword above.",
         "select_btn": "Select #",
         "skip_btn": "Skip this word",
         "done": "All done!",
@@ -39,11 +41,13 @@ UI_TEXT = {
         "title": "🎨 統計圖庫智能選擇器",
         "upload": "上傳詞彙列表 (CSV/Excel)",
         "select_col": "請問詞彙在哪個欄位？",
-        "search_label": "優化搜尋 (例如: '垃圾', '車'):",
+        "search_title": "🔍 找不到合適的圖片？",
+        "search_help": "沒找到滿意的結果嗎？您可以嘗試輸入更精確、更廣泛或相關的關鍵字，手動優化搜尋結果。",
+        "search_label": "輸入自訂關鍵字 (中文或英文):",
         "update_btn": "更新搜尋",
         "searching": "正在全面搜尋...",
         "searching_for": "正在搜尋: ",
-        "no_results": "未找到圖片。請在上方輸入框輸入具體關鍵字。",
+        "no_results": "未找到圖片。請嘗試在上方輸入其他關鍵字。",
         "select_btn": "選擇 #",
         "skip_btn": "跳過此詞彙",
         "done": "完成！",
@@ -100,7 +104,7 @@ def perform_search(word, override_term=None):
     return unique_results[:10], f"Multiple terms (Roots: {', '.join(variations[:3])})"
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="Irasutoya Selector", layout="wide")
+st.set_page_config(page_title="Irasutoya Smart Selector", layout="wide")
 
 # Language Switcher
 lang = st.sidebar.selectbox("Language / 語言", ["English", "Traditional Chinese"])
@@ -123,7 +127,9 @@ if uploaded_file:
         current_word = words[st.session_state.index]
         st.subheader(f"Word {st.session_state.index + 1} of {len(words)}: **{current_word}**")
         
-        with st.expander("🔍 Search Options", expanded=True):
+        # User-friendly Search Expander
+        with st.expander(t["search_title"]):
+            st.caption(t["search_help"])
             new_term = st.text_input(t["search_label"], value=st.session_state.manual_input)
             if st.button(t["update_btn"]):
                 st.session_state.manual_input = new_term
