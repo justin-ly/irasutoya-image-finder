@@ -4,97 +4,72 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 from deep_translator import GoogleTranslator
-import time
 
-# --- Helper Functions ---
-
-def translate_to_japanese(text):
-    try:
-        # We append 'イラスト' to force illustration results
-        return GoogleTranslator(source='auto', target='ja').translate(text) + " イラスト"
-    except:
-        return text
-
-def calculate_relevance(keyword, title):
-    """Simple logic to score relevance by word overlap."""
-    keyword_set = set(keyword.lower().split())
-    title_set = set(title.lower().split())
-    intersection = keyword_set.intersection(title_set)
-    return len(intersection) / len(keyword_set) if len(keyword_set) > 0 else 0
-
-def get_best_images(keyword_jp, original_keyword):
-    """Fetches top 10, then ranks them by relevance logic."""
+# --- Functions ---
+def get_candidates(keyword_jp):
+    """Fetches top 5 candidates."""
     try:
         search_url = f"https://www.irasutoya.com/search?q={quote(keyword_jp)}"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(search_url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
-        
         posts = soup.find_all('div', class_='boxim')
         results = []
-        
-        # Look at the top 10, not just top 3
-        for post in posts[:10]:
+        for post in posts[:5]:
             try:
-                title = post.get_text(strip=True)
-                post_link = post.find('a')['href']
-                
-                # Fetch the image
-                post_res = requests.get(post_link, headers=headers, timeout=5)
-                post_soup = BeautifulSoup(post_res.text, 'html.parser')
-                img_tag = post_soup.find('div', class_='separator').find('img')
-                img_url = img_tag['src'] if img_tag else "N/A"
-                
-                # Logic: Score the relevance
-                score = calculate_relevance(original_keyword, title)
-                results.append({"title": title, "url": img_url, "score": score})
-            except:
-                continue
-        
-        # Rank by score (high to low)
-        results.sort(key=lambda x: x['score'], reverse=True)
-        return results[:3] # Return top 3 ranked
-    except:
-        return []
+                img_tag = BeautifulSoup(requests.get(post.find('a')['href'], headers=headers, timeout=5).text, 'html.parser').find('div', class_='separator').find('img')
+                if img_tag: results.append(img_tag['src'])
+            except: continue
+        return results
+    except: return []
 
-# --- Streamlit UI ---
+# --- UI Logic ---
+st.set_page_config(page_title="Irasutoya Selector", layout="wide")
+st.title("🎨 Interactive Irasutoya Selector")
 
-st.set_page_config(page_title="Irasutoya Logic-Based Finder", page_icon="🎯")
-st.title("🎯 Irasutoya Pro: Logic-Based Search")
+if 'index' not in st.session_state: st.session_state.index = 0
+if 'selections' not in st.session_state: st.session_state.selections = []
 
-uploaded_file = st.file_uploader("Upload Vocabulary List (CSV/Excel)", type=["csv", "xlsx"])
+uploaded_file = st.file_uploader("Upload your list (CSV/Excel)", type=["csv", "xlsx"])
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-    col = st.selectbox("Which column has your vocabulary?", df.columns)
-    
-    if st.button("Generate Logic-Optimized Search"):
-        data = []
-        progress_bar = st.progress(0)
+    col = st.selectbox("Select vocabulary column", df.columns)
+    words = df[col].tolist()
+
+    if st.session_state.index < len(words):
+        current_word = words[st.session_state.index]
+        st.subheader(f"Word {st.session_state.index + 1} of {len(words)}: **{current_word}**")
         
-        for i, word in enumerate(df[col]):
-            # Translate & add 'Illustration' context
-            word_jp = translate_to_japanese(str(word))
+        jp_word = GoogleTranslator(source='auto', target='ja').translate(str(current_word)) + " イラスト"
+        candidates = get_candidates(jp_word)
+
+        if not candidates:
+            st.warning("No images found. Skipping...")
+            if st.button("Skip"):
+                st.session_state.selections.append("Not found")
+                st.session_state.index += 1
+                st.rerun()
+        else:
+            cols = st.columns(len(candidates))
+            choice = None
+            for i, img_url in enumerate(candidates):
+                with cols[i]:
+                    st.image(img_url, use_container_width=True)
+                    if st.button(f"Select #{i+1}", key=f"btn_{i}"):
+                        choice = img_url
             
-            # Logic Search
-            ranked_results = get_best_images(word_jp, str(word))
-            
-            # Formatting for table
-            row = [word]
-            for res in ranked_results:
-                row.append(res['url'])
-            
-            # Fill empty if < 3
-            while len(row) < 4:
-                row.append("No match found")
-            
-            data.append(row)
-            progress_bar.progress((i + 1) / len(df))
-            time.sleep(0.5) 
-            
-        final_df = pd.DataFrame(data, columns=[col, 'Link 1 (Best Match)', 'Link 2', 'Link 3'])
-        st.success("Search complete using relevance logic!")
+            if choice:
+                st.session_state.selections.append(choice)
+                st.session_state.index += 1
+                st.rerun()
+    else:
+        st.success("All done! Here is your final list:")
+        final_df = pd.DataFrame({col: words, 'Selected_Image': st.session_state.selections})
         st.dataframe(final_df)
-        
         csv = final_df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 Download Results", csv, "irasutoya_logic_results.csv", "text/csv")
+        st.download_button("📥 Download Spreadsheet", csv, "curated_images.csv", "text/csv")
+        if st.button("Start Over"):
+            st.session_state.index = 0
+            st.session_state.selections = []
+            st.rerun()
