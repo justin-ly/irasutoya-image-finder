@@ -37,22 +37,42 @@ def get_images(keyword):
     except Exception as e:
         return []
 
+@st.cache_data(show_spinner=False)
 def generate_dynamic_queue(word):
-    """Creates a search queue, cached by the calling function logic."""
+    """
+    Forces translation to Japanese and breaks the concept 
+    into broader categories if the specific term fails.
+    """
     queue = []
-    # 1. Direct translation to Japanese
-    direct_ja = cached_translate(word, target='ja')
-    queue.append(direct_ja)
     
-    # 2. Extract English roots
-    en_translation = cached_translate(word, target='en').lower()
-    parts = [p for p in en_translation.split() if len(p) > 3]
+    # 1. Force the Primary Japanese Translation
+    # This turns "垃圾車" into "ごみ収集車"
+    primary_ja = cached_translate(word, target='ja')
+    if primary_ja and primary_ja != word:
+        queue.append(primary_ja)
     
-    # 3. Add translated roots
-    for part in parts:
-        root_ja = cached_translate(part, source='en', target='ja')
-        if root_ja not in queue:
-            queue.append(root_ja)
+    # 2. Add the original word just in case (sometimes Kanji matches)
+    if word not in queue:
+        queue.append(word)
+
+    # 3. Conceptual Fallback (The "Decomposition" Logic)
+    # Translate to English first to get root nouns
+    en_concept = cached_translate(word, target='en').lower() # "garbage truck"
+    parts = en_concept.split() # ["garbage", "truck"]
+
+    if len(parts) > 1:
+        for part in parts:
+            if len(part) > 2:
+                # Translate "garbage" -> "ごみ", "truck" -> "トラック"
+                root_ja = cached_translate(part, source='en', target='ja')
+                if root_ja not in queue:
+                    queue.append(root_ja)
+                    
+    # 4. Global Broadener
+    # If it's a vehicle, adding "vehicle" or "car" can help find related tags
+    if "truck" in en_concept or "car" in en_concept:
+        queue.append("車") # Japanese for Car/Vehicle
+        
     return queue
 
 # --- UI Setup ---
